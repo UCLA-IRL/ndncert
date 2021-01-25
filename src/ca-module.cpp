@@ -35,6 +35,10 @@
 #include <ndn-cxx/util/random.hpp>
 #include <ndn-cxx/util/string-helper.hpp>
 
+#ifdef NDNCERT_HAS_NDNMPS
+#include <ndnmps/crypto-players.hpp>
+#endif
+
 namespace ndn {
 namespace ndncert {
 namespace ca {
@@ -286,13 +290,13 @@ CaModule::onNewRenewRevoke(const Interest& request, RequestType requestType)
     }
 
     // verify signature
-    if (!security::verifySignature(*clientCert, *clientCert)) {
+    if (!verifySignature(*clientCert, *clientCert)) {
       NDN_LOG_ERROR("Invalid signature in the self-signed certificate.");
       m_face.put(generateErrorDataPacket(request.getName(), ErrorCode::BAD_SIGNATURE,
                                          "Invalid signature in the self-signed certificate."));
       return;
     }
-    if (!security::verifySignature(request, *clientCert)) {
+    if (!verifySignature(request, *clientCert)) {
       NDN_LOG_ERROR("Invalid signature in the Interest packet.");
       m_face.put(generateErrorDataPacket(request.getName(), ErrorCode::BAD_SIGNATURE,
                                          "Invalid signature in the Interest packet."));
@@ -371,7 +375,7 @@ CaModule::onChallenge(const Interest& request)
     return;
   }
   // verify signature
-  if (!security::verifySignature(request, requestState->cert)) {
+  if (!verifySignature(request, requestState->cert)) {
     NDN_LOG_ERROR("Invalid Signature in the Interest packet.");
     m_face.put(generateErrorDataPacket(request.getName(), ErrorCode::BAD_SIGNATURE,
                                        "Invalid Signature in the Interest packet."));
@@ -516,6 +520,28 @@ CaModule::generateErrorDataPacket(const Name& name, ErrorCode error, const std::
   result.setContent(errortlv::encodeDataContent(error, errorInfo));
   m_keyChain.sign(result, signingByIdentity(m_config.caProfile.caPrefix));
   return result;
+}
+
+bool
+CaModule::verifySignature(const Data& data, const security::Certificate& certificate)
+{
+#ifdef NDNCERT_HAS_NDNMPS
+  if (data.getSignatureType() == ndn::tlv::SignatureSha256WithBls)
+    return MpsVerifier::verifySignature(data, certificate);
+#endif
+  return security::verifySignature(data, certificate);
+}
+
+bool
+CaModule::verifySignature(const Interest& interest, const security::Certificate& certificate)
+{
+#ifdef NDNCERT_HAS_NDNMPS
+  if (interest.getSignatureInfo() &&
+      interest.getSignatureInfo()->getSignatureType() == ndn::tlv::SignatureSha256WithBls)
+    return MpsVerifier::verifySignature(interest, certificate);
+#endif
+  return security::verifySignature(interest, certificate);
+
 }
 
 } // namespace ca
