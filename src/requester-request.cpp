@@ -174,6 +174,10 @@ Request::genRevokeInterest(const security::Certificate& certificate)
   if (!m_caProfile.caPrefix.isPrefixOf(certificate.getName())) {
     return nullptr;
   }
+
+  identityName = certificate.getIdentity();
+  m_keyManager->setIdentityName(identityName);
+
   // generate Interest packet
   Name interestName = m_caProfile.caPrefix;
   interestName.append("CA").append("REVOKE");
