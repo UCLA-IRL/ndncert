@@ -18,37 +18,25 @@
  * See AUTHORS.md for complete list of ndncert authors and contributors.
  */
 
-#include "assignment-param.hpp"
+#ifndef NDNCERT_ASSIGNMENT_INST_EMAIL_HPP
+#define NDNCERT_ASSIGNMENT_INST_EMAIL_HPP
+
+#include "assignment-func.hpp"
 
 namespace ndncert {
 
-NDNCERT_REGISTER_FUNCFACTORY(AssignmentParam, "param");
-
-AssignmentParam::AssignmentParam(const std::string& format)
-  : NameAssignmentFunc(format)
+/**
+ * assign names base on client probe parameter
+ */
+class AssignmentInstEmail : public NameAssignmentFunc
 {
-}
+public:
+  AssignmentInstEmail(const std::string& format = "");
 
-std::vector<ndn::PartialName>
-AssignmentParam::assignName(const std::multimap<std::string, std::string>& params)
-{
-  std::vector<ndn::PartialName> resultList;
-  Name result;
-  for (const auto& item : m_nameFormat) {
-    if (item.size() >= 2 && item[0] == '"' && item[item.size() - 1] == '"') {
-      result.append(item.substr(1, item.size() - 2));
-    } else {
-      auto it = std::find_if(params.begin(), params.end(),
-                             [&](const std::tuple<std::string, std::string> &e) { return std::get<0>(e) == item; });
-      if (it != params.end() && !it->second.empty()) {
-        result.append(it->second);
-      } else {
-        return resultList; // empty
-      }
-    }
-  }
-  resultList.push_back(std::move(result));
-  return resultList;
-}
+  std::vector<ndn::PartialName>
+  assignName(const std::multimap<std::string, std::string>& params) override;
+};
 
 } // namespace ndncert
+
+#endif // NDNCERT_ASSIGNMENT_INST_EMAIL_HPP

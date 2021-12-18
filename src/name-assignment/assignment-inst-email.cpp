@@ -18,36 +18,35 @@
  * See AUTHORS.md for complete list of ndncert authors and contributors.
  */
 
-#include "assignment-param.hpp"
+#include "assignment-inst-email.hpp"
 
 namespace ndncert {
 
-NDNCERT_REGISTER_FUNCFACTORY(AssignmentParam, "param");
+NDN_LOG_INIT(ndncert.name-assignment.assignmentInstEmail);
 
-AssignmentParam::AssignmentParam(const std::string& format)
+NDNCERT_REGISTER_FUNCFACTORY(AssignmentInstEmail, "inst-email");
+
+AssignmentInstEmail::AssignmentInstEmail(const std::string& format)
   : NameAssignmentFunc(format)
 {
+  if (m_nameFormat.size() != 1) {
+    NDN_LOG_WARN("Slash in the institution domain name. May cause undefined behaviors. ");
+  }
 }
 
 std::vector<ndn::PartialName>
-AssignmentParam::assignName(const std::multimap<std::string, std::string>& params)
+AssignmentInstEmail::assignName(const std::multimap<std::string, std::string>& params)
 {
   std::vector<ndn::PartialName> resultList;
   Name result;
-  for (const auto& item : m_nameFormat) {
-    if (item.size() >= 2 && item[0] == '"' && item[item.size() - 1] == '"') {
-      result.append(item.substr(1, item.size() - 2));
-    } else {
-      auto it = std::find_if(params.begin(), params.end(),
-                             [&](const std::tuple<std::string, std::string> &e) { return std::get<0>(e) == item; });
-      if (it != params.end() && !it->second.empty()) {
-        result.append(it->second);
-      } else {
-        return resultList; // empty
-      }
+  if (!m_nameFormat.empty() && params.count("email") > 0) {
+    const std::string& email = params.begin()->second;
+    const std::string& domain = m_nameFormat.at(0);
+    if (email.substr(email.size() - domain.size() - 1, domain.size() + 1) == "@" + domain) {
+      result.push_back(email.substr(0, email.size() - domain.size() - 1));
+      resultList.push_back(std::move(result));
     }
   }
-  resultList.push_back(std::move(result));
   return resultList;
 }
 
