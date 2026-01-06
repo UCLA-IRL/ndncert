@@ -27,9 +27,9 @@
 #include <regex>
 #include <memory>
 #include <netinet/in.h>
-#include <arpa/nameser.h>
 #include <arpa/inet.h>
-#include <resolv.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <cstring>
 #include <netdb.h>
 
@@ -268,101 +268,217 @@ ChallengeDns::verifyDnsRecord(const std::string& domain, const std::string& expe
 {
   std::string recordName = getDnsRecordName(domain);
 
-  // Initialize dedicated resolver pointed at 1.1.1.1 to ensure recursive resolution
-  struct __res_state resolver;
-  std::memset(&resolver, 0, sizeof(resolver));
+  constexpr uint16_t DNS_CLASS_IN = 1;
+  constexpr uint16_t DNS_TYPE_TXT = 16;
 
-  if (res_ninit(&resolver) != 0) {
-    NDN_LOG_ERROR("Failed to initialize resolver");
+  // Send a direct UDP DNS query to the configured resolver (avoids libresolv linkage issues).
+  int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) {
+    NDN_LOG_ERROR("Failed to create UDP socket");
     return false;
   }
 
-  auto resolverGuard = std::unique_ptr<struct __res_state, decltype(&res_nclose)>(&resolver, res_nclose);
+  auto sockGuard = std::unique_ptr<int, void(*)(int*)>(&sock, [](int* fd) {
+    if (fd && *fd >= 0) {
+      ::close(*fd);
+      *fd = -1;
+    }
+  });
 
-  resolver.options |= RES_RECURSE;
-  resolver.nscount = 1;
-  resolver.nsaddr_list[0].sin_family = AF_INET;
-  resolver.nsaddr_list[0].sin_port = htons(DNS_RESOLVER_PORT);
-  if (inet_pton(AF_INET, DNS_RESOLVER_IP, &resolver.nsaddr_list[0].sin_addr) != 1) {
+  timeval timeout{};
+  timeout.tv_sec = 3;
+  timeout.tv_usec = 0;
+  (void)::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+  sockaddr_in resolverAddr{};
+  resolverAddr.sin_family = AF_INET;
+  resolverAddr.sin_port = htons(DNS_RESOLVER_PORT);
+  if (inet_pton(AF_INET, DNS_RESOLVER_IP, &resolverAddr.sin_addr) != 1) {
     NDN_LOG_ERROR("Invalid resolver address " << DNS_RESOLVER_IP);
     return false;
   }
 
-  // Query buffer
+  // Build minimal RFC1035 DNS query (one question)
+  unsigned char query[512];
+  size_t qlen = 0;
+  auto putU16 = [&](uint16_t v) {
+    uint16_t tmp = htons(v);
+    std::memcpy(query + qlen, &tmp, sizeof(tmp));
+    qlen += 2;
+  };
+
+  // Transaction ID derived from time (good enough for our single-shot query)
+  uint16_t txid = static_cast<uint16_t>(time::system_clock::now().time_since_epoch().count());
+
+  if (sizeof(query) < 12) {
+    return false;
+  }
+  putU16(txid);
+  putU16(0x0100); // flags: RD
+  putU16(1);      // QDCOUNT
+  putU16(0);      // ANCOUNT
+  putU16(0);      // NSCOUNT
+  putU16(0);      // ARCOUNT
+
+  // QNAME
+  size_t start = 0;
+  while (start < recordName.size()) {
+    size_t dot = recordName.find('.', start);
+    if (dot == std::string::npos) {
+      dot = recordName.size();
+    }
+    size_t labelLen = dot - start;
+    if (labelLen == 0 || labelLen > 63 || qlen + 1 + labelLen >= sizeof(query)) {
+      NDN_LOG_TRACE("Invalid DNS name: " << recordName);
+      return false;
+    }
+    query[qlen++] = static_cast<unsigned char>(labelLen);
+    std::memcpy(query + qlen, recordName.data() + start, labelLen);
+    qlen += labelLen;
+    start = dot + 1;
+  }
+  if (qlen + 1 + 4 > sizeof(query)) {
+    return false;
+  }
+  query[qlen++] = 0; // end of name
+
+  putU16(DNS_TYPE_TXT);
+  putU16(DNS_CLASS_IN);
+
+  ssize_t sent = ::sendto(sock, query, qlen, 0, reinterpret_cast<sockaddr*>(&resolverAddr), sizeof(resolverAddr));
+  if (sent < 0 || static_cast<size_t>(sent) != qlen) {
+    NDN_LOG_TRACE("DNS query send failed for " << recordName);
+    return false;
+  }
+
   unsigned char answer[4096];
-
-  // Perform DNS TXT query
-  int answerLen = res_nquery(&resolver, recordName.c_str(), C_IN, T_TXT, answer, sizeof(answer));
-  if (answerLen < 0) {
-    NDN_LOG_TRACE("DNS query failed for " << recordName << " (h_errno=" << resolver.res_h_errno << ")");
+  sockaddr_in from{};
+  socklen_t fromLen = sizeof(from);
+  ssize_t recvd = ::recvfrom(sock, answer, sizeof(answer), 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
+  if (recvd <= 0) {
+    NDN_LOG_TRACE("DNS query receive failed/timeout for " << recordName);
     return false;
   }
 
-  // Parse DNS response
-  HEADER* header = reinterpret_cast<HEADER*>(answer);
-  if (header->rcode != NOERROR) {
-    NDN_LOG_TRACE("DNS query returned error code: " << header->rcode);
+  // Basic TXID check
+  if (static_cast<size_t>(recvd) >= 2) {
+    uint16_t rxid;
+    std::memcpy(&rxid, answer, sizeof(rxid));
+    if (ntohs(rxid) != txid) {
+      NDN_LOG_TRACE("DNS response TXID mismatch for " << recordName);
+      return false;
+    }
+  }
+
+  int answerLen = static_cast<int>(recvd);
+
+  const size_t msgLen = static_cast<size_t>(answerLen);
+  if (msgLen < 12) {
+    NDN_LOG_TRACE("DNS response too short for " << recordName);
     return false;
   }
 
-  if (ntohs(header->ancount) == 0) {
+  auto readU16 = [&](size_t offset, uint16_t& value) -> bool {
+    if (offset + 2 > msgLen) {
+      return false;
+    }
+    uint16_t tmp;
+    std::memcpy(&tmp, answer + offset, sizeof(tmp));
+    value = ntohs(tmp);
+    return true;
+  };
+
+  uint16_t flags = 0;
+  uint16_t qdcount = 0;
+  uint16_t ancount = 0;
+  if (!readU16(2, flags) || !readU16(4, qdcount) || !readU16(6, ancount)) {
+    NDN_LOG_TRACE("Failed to parse DNS header for " << recordName);
+    return false;
+  }
+
+  uint8_t rcode = static_cast<uint8_t>(flags & 0x000F);
+  if (rcode != 0) {
+    NDN_LOG_TRACE("DNS query returned error code: " << static_cast<int>(rcode));
+    return false;
+  }
+
+  if (ancount == 0) {
     NDN_LOG_TRACE("No TXT records found for " << recordName);
     return false;
   }
 
-  // Skip DNS header and question section
-  unsigned char* ptr = answer + sizeof(HEADER);
-  unsigned char* endPtr = answer + answerLen;
+  auto skipName = [&](size_t& offset) -> bool {
+    // RFC1035 name with optional compression pointers
+    for (int steps = 0; steps < 128; ++steps) {
+      if (offset >= msgLen) {
+        return false;
+      }
+      uint8_t len = answer[offset];
+      if (len == 0) {
+        ++offset;
+        return true;
+      }
+      if ((len & 0xC0) == 0xC0) {
+        if (offset + 2 > msgLen) {
+          return false;
+        }
+        offset += 2;
+        return true;
+      }
+      if ((len & 0xC0) != 0) {
+        return false;
+      }
+      offset += static_cast<size_t>(len) + 1;
+    }
+    return false;
+  };
+
+  size_t offset = 12;
 
   // Skip question section
-  for (int i = 0; i < ntohs(header->qdcount) && ptr < endPtr; i++) {
-    // Skip QNAME
-    while (ptr < endPtr && *ptr != 0) {
-      if ((*ptr & 0xC0) == 0xC0) {
-        ptr += 2; // Compressed name
-        break;
-      }
-      else {
-        ptr += *ptr + 1; // Label length + label
-      }
+  for (uint16_t i = 0; i < qdcount; ++i) {
+    if (!skipName(offset)) {
+      return false;
     }
-    if (ptr < endPtr && *ptr == 0) ptr++; // Skip null terminator
-    ptr += 4; // Skip QTYPE and QCLASS
+    if (offset + 4 > msgLen) {
+      return false;
+    }
+    offset += 4; // QTYPE + QCLASS
   }
 
   // Parse answer section
-  for (int i = 0; i < ntohs(header->ancount) && ptr < endPtr; i++) {
-    // Skip NAME field
-    if ((*ptr & 0xC0) == 0xC0) {
-      ptr += 2; // Compressed name
+  for (uint16_t i = 0; i < ancount && offset < msgLen; ++i) {
+    if (!skipName(offset)) {
+      break;
     }
-    else {
-      while (ptr < endPtr && *ptr != 0) {
-        ptr += *ptr + 1;
-      }
-      if (ptr < endPtr) ptr++; // Skip null terminator
+    if (offset + 10 > msgLen) {
+      break;
     }
 
-    if (ptr + 10 > endPtr) break; // Not enough data for TYPE, CLASS, TTL, RDLENGTH
+    uint16_t type = 0;
+    uint16_t class_ = 0;
+    uint16_t rdlength = 0;
+    if (!readU16(offset, type) || !readU16(offset + 2, class_) || !readU16(offset + 8, rdlength)) {
+      break;
+    }
+    offset += 10; // TYPE(2) + CLASS(2) + TTL(4) + RDLENGTH(2)
 
-    uint16_t type = ntohs(*(uint16_t*)ptr);
-    ptr += 2;
-    uint16_t class_ = ntohs(*(uint16_t*)ptr);
-    ptr += 2;
-    ptr += 4; // Skip TTL
-    uint16_t rdlength = ntohs(*(uint16_t*)ptr);
-    ptr += 2;
+    if (offset + rdlength > msgLen) {
+      break;
+    }
 
-    if (ptr + rdlength > endPtr) break; // Not enough data for RDATA
+    if (type == DNS_TYPE_TXT && class_ == DNS_CLASS_IN) {
+      const unsigned char* rdata = answer + offset;
+      size_t rdlen = rdlength;
 
-    if (type == T_TXT && class_ == C_IN) {
-      // Parse TXT record data
-      unsigned char* txtEnd = ptr + rdlength;
-      while (ptr < txtEnd) {
-        uint8_t txtLen = *ptr++;
-        if (ptr + txtLen > txtEnd) break;
+      size_t pos = 0;
+      while (pos < rdlen) {
+        uint8_t txtLen = rdata[pos++];
+        if (pos + txtLen > rdlen) {
+          break;
+        }
 
-        std::string txtValue(reinterpret_cast<char*>(ptr), txtLen);
+        std::string txtValue(reinterpret_cast<const char*>(rdata + pos), txtLen);
         NDN_LOG_TRACE("Found TXT record: " << txtValue);
 
         if (txtValue == expectedValue) {
@@ -370,12 +486,11 @@ ChallengeDns::verifyDnsRecord(const std::string& domain, const std::string& expe
           return true;
         }
 
-        ptr += txtLen;
+        pos += txtLen;
       }
     }
-    else {
-      ptr += rdlength; // Skip non-TXT records
-    }
+
+    offset += rdlength;
   }
 
   NDN_LOG_TRACE("Expected TXT value not found in DNS response");
