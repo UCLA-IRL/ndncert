@@ -33,22 +33,21 @@ encodeDataContent(ca::RequestState& request, const Name& issuedCertName, const N
                                                         request.challengeState->remainingTries));
     response.push_back(ndn::makeNonNegativeIntegerBlock(tlv::RemainingTime,
                                                         request.challengeState->remainingTime.count()));
-    if (request.challengeState->challengeStatus == "need-proof") {
-      response.push_back(ndn::makeStringBlock(tlv::ParameterKey, "nonce"));
-      auto nonce = ndn::fromHex(request.challengeState->secrets.get("nonce", ""));
+    if (request.challengeState->challengeStatus == CHALLENGE_STATUS_NEED_PROOF) {
+      response.push_back(ndn::makeStringBlock(tlv::ParameterKey, PARAMETER_KEY_NONCE));
+      auto nonce = ndn::fromHex(request.challengeState->secrets.get(PARAMETER_KEY_NONCE, ""));
       response.push_back(ndn::makeBinaryBlock(tlv::ParameterValue, *nonce));
     }
-    else if (request.challengeState->challengeStatus == "need-record") {
-      // Include DNS record information for DNS challenges
-      std::string recordName = request.challengeState->secrets.get("record-name", "");
-      std::string expectedValue = request.challengeState->secrets.get("expected-value", "");
-      
+    else if (request.challengeState->challengeStatus == CHALLENGE_STATUS_NEED_RECORD) {
+      std::string recordName = request.challengeState->secrets.get(PARAMETER_KEY_RECORD_NAME, "");
+      std::string expectedValue = request.challengeState->secrets.get(PARAMETER_KEY_EXPECTED_VALUE, "");
+
       if (!recordName.empty()) {
-        response.push_back(ndn::makeStringBlock(tlv::ParameterKey, "record-name"));
+        response.push_back(ndn::makeStringBlock(tlv::ParameterKey, PARAMETER_KEY_RECORD_NAME));
         response.push_back(ndn::makeStringBlock(tlv::ParameterValue, recordName));
       }
       if (!expectedValue.empty()) {
-        response.push_back(ndn::makeStringBlock(tlv::ParameterKey, "expected-value"));
+        response.push_back(ndn::makeStringBlock(tlv::ParameterKey, PARAMETER_KEY_EXPECTED_VALUE));
         response.push_back(ndn::makeStringBlock(tlv::ParameterValue, expectedValue));
       }
     }
@@ -114,20 +113,20 @@ decodeDataContent(const Block& contentBlock, requester::Request& state)
     }
     else {
       if (item.type() == tlv::ParameterValue) {
-        if (currentParameterKey == "nonce") {
+        if (currentParameterKey == PARAMETER_KEY_NONCE) {
           if (item.value_size() != 16) {
             NDN_THROW(std::runtime_error("Wrong nonce length"));
           }
           memcpy(state.m_nonce.data(), item.value(), 16);
         }
-        else if (currentParameterKey == "record-name") {
+        else if (currentParameterKey == PARAMETER_KEY_RECORD_NAME) {
           state.m_dnsRecordName = readString(item);
         }
-        else if (currentParameterKey == "expected-value") {
+        else if (currentParameterKey == PARAMETER_KEY_EXPECTED_VALUE) {
           state.m_dnsExpectedValue = readString(item);
         }
         else {
-          NDN_THROW(std::runtime_error("Unknown Parameter: " + currentParameterKey));
+          // Ignore unknown parameters for forward compatibility.
         }
         currentParameterKey.clear(); // Reset for next parameter
       }
