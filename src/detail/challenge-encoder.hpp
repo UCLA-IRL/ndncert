@@ -26,6 +26,13 @@
 
 namespace ndncert::challengetlv {
 
+const std::string CHALLENGE_STATUS_NEED_PROOF = "need-proof";
+const std::string CHALLENGE_STATUS_NEED_RECORD = "need-record";
+
+const std::string PARAMETER_KEY_NONCE = "nonce";
+const std::string PARAMETER_KEY_RECORD_NAME = "record-name";
+const std::string PARAMETER_KEY_EXPECTED_VALUE = "expected-value";
+
 Block
 encodeDataContent(ca::RequestState& request, const Name& issuedCertName = Name(),
                   const Name& forwardingHint = Name());

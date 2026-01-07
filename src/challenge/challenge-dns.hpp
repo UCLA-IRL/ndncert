@@ -28,7 +28,7 @@
 namespace ndncert {
 
 /**
- * @brief Provide DNS-based challenge following Let's Encrypt DNS-01 practice.
+ * @brief Provide DNS-based challenge for domain ownership validation.
  *
  * The main process of this challenge module is:
  *   1. Requester provides the domain name they want to prove ownership of.
@@ -42,21 +42,21 @@ namespace ndncert {
  *   challenge-token + "." + requester-key-hash
  *
  * There are several challenge statuses in DNS challenge:
+ *   NEED_DOMAIN: When domain name is needed from requester.
  *   NEED_RECORD: When DNS record details have been provided and record needs to be created.
  *   WRONG_RECORD: When DNS lookup fails or record doesn't match.
+ *   READY_FOR_VALIDATION: When requester confirms record is ready for validation.
  *
  * Failure info when challenge fails:
  *   FAILURE_MAXRETRY: When run out of retry times for DNS verification.
  *   FAILURE_TIMEOUT: When the challenge lifetime expires.
  *   FAILURE_DNS_LOOKUP: When DNS lookup consistently fails.
- *
- * @sa https://letsencrypt.org/docs/challenge-types/#dns-01-challenge
  */
 class ChallengeDns : public ChallengeModule
 {
 public:
-  ChallengeDns(const size_t& maxAttemptTimes = 3,
-               const time::seconds secretLifetime = time::seconds(3600),
+  ChallengeDns(const size_t& maxAttemptTimes = 5,
+               const time::seconds secretLifetime = time::seconds(1800),
                const std::string& configPath = "");
 
   // For CA
@@ -72,8 +72,10 @@ public:
                          const std::multimap<std::string, std::string>& params) override;
 
   // challenge status
+  static const std::string NEED_DOMAIN;
   static const std::string NEED_RECORD;
   static const std::string WRONG_RECORD;
+  static const std::string READY_FOR_VALIDATION;
   
   // challenge parameters
   static const std::string PARAMETER_KEY_DOMAIN;
@@ -86,7 +88,7 @@ NDNCERT_PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   static std::string
   computeChallengeResponse(const std::string& token, const std::string& keyHash);
 
-  NDNCERT_VIRTUAL_WITH_TESTS bool
+  virtual bool
   verifyDnsRecord(const std::string& domain, const std::string& expectedValue) const;
 
   std::string
