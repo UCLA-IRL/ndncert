@@ -136,7 +136,6 @@ setRecvTimeout(int sock, int timeoutMs)
 const std::string ChallengeDns::NEED_DOMAIN = "need-domain";
 const std::string ChallengeDns::NEED_RECORD = "need-record";
 const std::string ChallengeDns::WRONG_RECORD = "wrong-record";
-const std::string ChallengeDns::READY_FOR_VALIDATION = "ready-for-validation";
 const std::string ChallengeDns::PARAMETER_KEY_DOMAIN = "domain";
 const std::string ChallengeDns::PARAMETER_KEY_CONFIRMATION = "confirmation";
 const std::string ChallengeDns::DNS_PREFIX = "_ndncert-challenge";
@@ -251,8 +250,9 @@ ChallengeDns::handleChallengeRequest(const Block& params, ca::RequestState& requ
       return returnWithError(request, ErrorCode::OUT_OF_TIME, "Challenge expired.");
     }
 
-    if (challengeStatus == NEED_RECORD) {
-      // Requester confirms they've created/updated the DNS record
+    if (challengeStatus == NEED_RECORD || challengeStatus == WRONG_RECORD) {
+      // 2RTT: the confirmation=ready packet itself performs the DNS lookup
+      // and returns success or WRONG_RECORD directly; no extra round.
       static const std::string READY_CONFIRMATION = "ready";
       std::string confirmation = readString(params.get(tlv::ParameterValue));
       if (confirmation != READY_CONFIRMATION) {
@@ -260,14 +260,7 @@ ChallengeDns::handleChallengeRequest(const Block& params, ca::RequestState& requ
                               "Expected '" + READY_CONFIRMATION + "' confirmation");
       }
 
-      // Enter validation phase (client may delay triggering validation)
-      auto remainTime = getRemainingTime(currentTime, request.challengeState->timestamp);
-      return returnWithNewChallengeStatus(request, READY_FOR_VALIDATION, std::move(secret),
-                                         request.challengeState->remainingTries, remainTime);
-    }
-    else if (challengeStatus == READY_FOR_VALIDATION || challengeStatus == WRONG_RECORD) {
-      // Perform DNS verification (ignore request parameters; different clients may send
-      // either confirmation=ready or verify=now depending on status).
+      // Perform DNS verification
       std::string domain = secret.get<std::string>("domain");
       std::string expectedValue = secret.get<std::string>("expected-value");
 
@@ -309,9 +302,6 @@ ChallengeDns::getRequestedParameterList(Status status, const std::string& challe
     result.emplace(PARAMETER_KEY_CONFIRMATION,
                   "Create the DNS TXT record as instructed, then enter 'ready' to proceed");
   }
-  else if (status == Status::CHALLENGE && challengeStatus == READY_FOR_VALIDATION) {
-    // Automatic validation phase - no user input needed
-  }
   else if (status == Status::CHALLENGE && challengeStatus == WRONG_RECORD) {
     result.emplace(PARAMETER_KEY_CONFIRMATION,
                   "DNS record verification failed. Please check the record and enter 'ready' to retry");
@@ -341,12 +331,6 @@ ChallengeDns::genChallengeRequestTLV(Status status, const std::string& challenge
     request.push_back(ndn::makeStringBlock(tlv::SelectedChallenge, CHALLENGE_TYPE));
     request.push_back(ndn::makeStringBlock(tlv::ParameterKey, PARAMETER_KEY_CONFIRMATION));
     request.push_back(ndn::makeStringBlock(tlv::ParameterValue, paramValue));
-  }
-  else if (status == Status::CHALLENGE && challengeStatus == READY_FOR_VALIDATION) {
-    // Automatic verification - send challenge type only
-    request.push_back(ndn::makeStringBlock(tlv::SelectedChallenge, CHALLENGE_TYPE));
-    request.push_back(ndn::makeStringBlock(tlv::ParameterKey, "verify"));
-    request.push_back(ndn::makeStringBlock(tlv::ParameterValue, "now"));
   }
   else {
     NDN_THROW(std::runtime_error("Unexpected challenge status"));
