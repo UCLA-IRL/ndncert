@@ -45,7 +45,6 @@ namespace ndncert {
  *   NEED_DOMAIN: When domain name is needed from requester.
  *   NEED_RECORD: When DNS record details have been provided and record needs to be created.
  *   WRONG_RECORD: When DNS lookup fails or record doesn't match.
- *   READY_FOR_VALIDATION: When requester confirms record is ready for validation.
  *
  * Failure info when challenge fails:
  *   FAILURE_MAXRETRY: When run out of retry times for DNS verification.
@@ -75,7 +74,6 @@ public:
   static const std::string NEED_DOMAIN;
   static const std::string NEED_RECORD;
   static const std::string WRONG_RECORD;
-  static const std::string READY_FOR_VALIDATION;
   
   // challenge parameters
   static const std::string PARAMETER_KEY_DOMAIN;

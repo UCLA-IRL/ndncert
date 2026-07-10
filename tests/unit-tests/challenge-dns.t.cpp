@@ -178,17 +178,10 @@ BOOST_FIXTURE_TEST_CASE(TestConfirmationStep, DnsChallengeFixture)
   auto [errorCode2, errorInfo2] = challenge.handleChallengeRequest(params2, state);
 
   BOOST_CHECK_EQUAL(static_cast<uint64_t>(errorCode2), static_cast<uint64_t>(ErrorCode::NO_ERROR));
-  BOOST_CHECK_EQUAL(state.challengeState->challengeStatus, ChallengeDns::READY_FOR_VALIDATION);
-  BOOST_CHECK_EQUAL(state.challengeState->remainingTries, 3);
-
-  // Trigger validation
-  Block params3(tlv::EncryptedPayload);
-  params3.push_back(ndn::makeStringBlock(tlv::ParameterKey, "verify"));
-  params3.push_back(ndn::makeStringBlock(tlv::ParameterValue, "now"));
-  params3.encode();
-
-  auto [errorCode3, errorInfo3] = challenge.handleChallengeRequest(params3, state);
-  BOOST_CHECK_EQUAL(static_cast<uint64_t>(errorCode3), static_cast<uint64_t>(ErrorCode::NO_ERROR));
+  // 2RTT: confirmation=ready performs the DNS lookup directly. With verifyResult=false,
+  // the challenge transitions to WRONG_RECORD in the same round (no READY_FOR_VALIDATION
+  // intermediate, no third round).
+  BOOST_REQUIRE(state.challengeState.has_value());
   BOOST_CHECK_EQUAL(state.challengeState->challengeStatus, ChallengeDns::WRONG_RECORD);
   BOOST_CHECK_EQUAL(state.challengeState->remainingTries, 2);
 }
@@ -204,6 +197,10 @@ BOOST_FIXTURE_TEST_CASE(TestConfirmationSuccess, DnsChallengeFixture)
   auto [errorCode1, errorInfo1] = challenge.handleChallengeRequest(params1, state);
   BOOST_REQUIRE_EQUAL(static_cast<uint64_t>(errorCode1), static_cast<uint64_t>(ErrorCode::NO_ERROR));
 
+  // 2RTT: confirmation=ready performs the DNS lookup directly. Stub it to succeed.
+  challenge.verifyResult = true;
+  challenge.verifyCalls = 0;
+
   Block params2(tlv::EncryptedPayload);
   params2.push_back(ndn::makeStringBlock(tlv::ParameterKey, "confirmation"));
   params2.push_back(ndn::makeStringBlock(tlv::ParameterValue, "ready"));
@@ -211,25 +208,9 @@ BOOST_FIXTURE_TEST_CASE(TestConfirmationSuccess, DnsChallengeFixture)
 
   auto [errorCode2, errorInfo2] = challenge.handleChallengeRequest(params2, state);
   BOOST_CHECK_EQUAL(static_cast<uint64_t>(errorCode2), static_cast<uint64_t>(ErrorCode::NO_ERROR));
-  BOOST_CHECK_EQUAL(state.challengeState->challengeStatus, ChallengeDns::READY_FOR_VALIDATION);
-
-  // Stub DNS verification to succeed
-  challenge.verifyResult = true;
-  challenge.verifyCalls = 0;
-
-  // Trigger validation
-  Block params3(tlv::EncryptedPayload);
-  params3.push_back(ndn::makeStringBlock(tlv::ParameterKey, "verify"));
-  params3.push_back(ndn::makeStringBlock(tlv::ParameterValue, "now"));
-  params3.encode();
-
-  auto [errorCode3, errorInfo3] = challenge.handleChallengeRequest(params3, state);
-  BOOST_CHECK_EQUAL(static_cast<uint64_t>(errorCode3), static_cast<uint64_t>(ErrorCode::NO_ERROR));
   BOOST_CHECK_EQUAL(challenge.verifyCalls, 1);
-  if (state.challengeState) {
-    BOOST_TEST_MESSAGE("Post-validation status=" << state.challengeState->challengeStatus
-                      << " remainingTries=" << state.challengeState->remainingTries);
-  }
+  // 2RTT: success means the certificate has been issued (Status::PENDING) and the
+  // challenge state is cleared; there is no READY_FOR_VALIDATION intermediate.
   BOOST_CHECK(state.status == Status::PENDING);
   BOOST_CHECK(!state.challengeState);
 }
@@ -267,12 +248,9 @@ BOOST_FIXTURE_TEST_CASE(TestParameterRequests, DnsChallengeFixture)
   BOOST_CHECK_EQUAL(params2.size(), 1);
   BOOST_CHECK(params2.find("confirmation") != params2.end());
 
-  auto params3 = challenge.getRequestedParameterList(Status::CHALLENGE, ChallengeDns::READY_FOR_VALIDATION);
-  BOOST_CHECK_EQUAL(params3.size(), 0);
-
-  auto params4 = challenge.getRequestedParameterList(Status::CHALLENGE, ChallengeDns::WRONG_RECORD);
-  BOOST_CHECK_EQUAL(params4.size(), 1);
-  BOOST_CHECK(params4.find("confirmation") != params4.end());
+  auto params3 = challenge.getRequestedParameterList(Status::CHALLENGE, ChallengeDns::WRONG_RECORD);
+  BOOST_CHECK_EQUAL(params3.size(), 1);
+  BOOST_CHECK(params3.find("confirmation") != params3.end());
 }
 
 BOOST_FIXTURE_TEST_CASE(TestTLVGeneration, DnsChallengeFixture)
@@ -290,11 +268,6 @@ BOOST_FIXTURE_TEST_CASE(TestTLVGeneration, DnsChallengeFixture)
   params.emplace("confirmation", "ready");
   auto tlv2 = challenge.genChallengeRequestTLV(Status::CHALLENGE, ChallengeDns::NEED_RECORD, params);
   BOOST_CHECK_GT(tlv2.size(), 0);
-
-  // Test validation TLV
-  params.clear();
-  auto tlv3 = challenge.genChallengeRequestTLV(Status::CHALLENGE, ChallengeDns::READY_FOR_VALIDATION, params);
-  BOOST_CHECK_GT(tlv3.size(), 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
