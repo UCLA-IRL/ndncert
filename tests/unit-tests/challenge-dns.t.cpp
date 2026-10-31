@@ -35,7 +35,7 @@ class DnsChallengeFixture : public KeyChainFixture
 public:
   DnsChallengeFixture()
     : challenge(3, time::seconds(1800))
-    , identity(m_keyChain.createIdentity("/example"))
+    , identity(m_keyChain.createIdentity("/example/example.com"))
     , key(identity.getDefaultKey())
     , cert(key.getDefaultCertificate())
   {
@@ -152,6 +152,24 @@ BOOST_FIXTURE_TEST_CASE(TestInvalidDomain, DnsChallengeFixture)
   auto [errorCode, errorInfo] = challenge.handleChallengeRequest(params, state);
 
   BOOST_CHECK_EQUAL(static_cast<uint64_t>(errorCode), static_cast<uint64_t>(ErrorCode::INVALID_PARAMETER));
+  BOOST_CHECK(state.status == Status::FAILURE);
+}
+
+BOOST_FIXTURE_TEST_CASE(TestMismatchedName, DnsChallengeFixture)
+{
+  // Request a name that does not correspond to the verified domain
+  auto victimIdentity = m_keyChain.createIdentity("/example/victim");
+  auto victimKey = victimIdentity.getDefaultKey();
+  state.cert = victimKey.getDefaultCertificate();
+
+  Block params(tlv::EncryptedPayload);
+  params.push_back(ndn::makeStringBlock(tlv::ParameterKey, "domain"));
+  params.push_back(ndn::makeStringBlock(tlv::ParameterValue, "example.com"));
+  params.encode();
+
+  auto [errorCode, errorInfo] = challenge.handleChallengeRequest(params, state);
+
+  BOOST_CHECK_EQUAL(static_cast<uint64_t>(errorCode), static_cast<uint64_t>(ErrorCode::NAME_NOT_ALLOWED));
   BOOST_CHECK(state.status == Status::FAILURE);
 }
 

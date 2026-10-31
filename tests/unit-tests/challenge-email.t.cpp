@@ -44,7 +44,7 @@ BOOST_AUTO_TEST_CASE(EmailAddressChecker)
 
 BOOST_AUTO_TEST_CASE(OnChallengeRequestWithEmail)
 {
-  auto identity = m_keyChain.createIdentity(Name("/ndn/site1"));
+  auto identity = m_keyChain.createIdentity(Name("/ndn/site1/zhiyi@cs.ucla.edu"));
   auto key = identity.getDefaultKey();
   auto cert = key.getDefaultCertificate();
   RequestId requestId = {{101}};
@@ -94,6 +94,52 @@ BOOST_AUTO_TEST_CASE(OnChallengeRequestWithEmail)
   std::string certName = line;
   BOOST_CHECK_EQUAL(certName, cert.getName());
   std::remove("tmp.txt");
+}
+
+BOOST_AUTO_TEST_CASE(OnChallengeRequestWithMismatchedName)
+{
+  auto identity = m_keyChain.createIdentity(Name("/ndn/victim"));
+  auto key = identity.getDefaultKey();
+  auto cert = key.getDefaultCertificate();
+  RequestId requestId = {{101}};
+  ca::RequestState request;
+  request.caPrefix = Name("/ndn");
+  request.requestId = requestId;
+  request.requestType = RequestType::NEW;
+  request.cert = cert;
+
+  Block paramTLV = ndn::makeEmptyBlock(tlv::EncryptedPayload);
+  paramTLV.push_back(ndn::makeStringBlock(tlv::ParameterKey, ChallengeEmail::PARAMETER_KEY_EMAIL));
+  paramTLV.push_back(ndn::makeStringBlock(tlv::ParameterValue, "alice@example.com"));
+
+  ChallengeEmail challenge("./tests/unit-tests/test-send-email.sh");
+  auto [errCode, errMsg] = challenge.handleChallengeRequest(paramTLV, request);
+
+  BOOST_CHECK_EQUAL(errCode, ErrorCode::NAME_NOT_ALLOWED);
+  BOOST_CHECK(request.status == Status::FAILURE);
+}
+
+BOOST_AUTO_TEST_CASE(OnChallengeRequestWithDeeperName)
+{
+  auto identity = m_keyChain.createIdentity(Name("/ndn/a/alice@example.com"));
+  auto key = identity.getDefaultKey();
+  auto cert = key.getDefaultCertificate();
+  RequestId requestId = {{101}};
+  ca::RequestState request;
+  request.caPrefix = Name("/ndn");
+  request.requestId = requestId;
+  request.requestType = RequestType::NEW;
+  request.cert = cert;
+
+  Block paramTLV = ndn::makeEmptyBlock(tlv::EncryptedPayload);
+  paramTLV.push_back(ndn::makeStringBlock(tlv::ParameterKey, ChallengeEmail::PARAMETER_KEY_EMAIL));
+  paramTLV.push_back(ndn::makeStringBlock(tlv::ParameterValue, "alice@example.com"));
+
+  ChallengeEmail challenge("./tests/unit-tests/test-send-email.sh");
+  auto [errCode, errMsg] = challenge.handleChallengeRequest(paramTLV, request);
+
+  BOOST_CHECK_EQUAL(errCode, ErrorCode::NAME_NOT_ALLOWED);
+  BOOST_CHECK(request.status == Status::FAILURE);
 }
 
 BOOST_AUTO_TEST_CASE(OnChallengeRequestWithCode)
