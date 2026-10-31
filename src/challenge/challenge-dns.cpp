@@ -214,6 +214,15 @@ ChallengeDns::handleChallengeRequest(const Block& params, ca::RequestState& requ
       return returnWithError(request, ErrorCode::INVALID_PARAMETER, "Invalid domain name");
     }
 
+    Name expectedIdentity = request.caPrefix;
+    expectedIdentity.append(Name::Component(domain));
+    if (request.cert.getIdentity() != expectedIdentity) {
+      NDN_LOG_ERROR("Requested name does not match the verified domain: domain=" << domain
+                    << " requested=" << request.cert.getIdentity());
+      return returnWithError(request, ErrorCode::NAME_NOT_ALLOWED,
+                             "Requested certificate name does not match the verified domain.");
+    }
+
     // Generate challenge token
     std::string challengeToken = generateSecretCode();
 

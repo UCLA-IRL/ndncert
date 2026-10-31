@@ -65,10 +65,13 @@ ChallengeEmail::handleChallengeRequest(const Block& params, ca::RequestState& re
   if (request.status == Status::BEFORE_CHALLENGE) {
     // for the first time, init the challenge
     std::string emailAddress = readString(params.get(tlv::ParameterValue));
-    auto lastComponentRequested = readString(request.cert.getIdentity().get(-1));
-    if (lastComponentRequested != emailAddress) {
-      NDN_LOG_TRACE("Email and requested name do not match: email=" << emailAddress
-                    << " requested=" << lastComponentRequested);
+    Name expectedIdentity = request.caPrefix;
+    expectedIdentity.append(Name::Component(emailAddress));
+    if (request.cert.getIdentity() != expectedIdentity) {
+      NDN_LOG_ERROR("Requested name does not match the authenticated email: email=" << emailAddress
+                    << " requested=" << request.cert.getIdentity());
+      return returnWithError(request, ErrorCode::NAME_NOT_ALLOWED,
+                             "Requested certificate name does not match the authenticated email.");
     }
     std::string emailCode = generateSecretCode();
     JsonSection secretJson;
