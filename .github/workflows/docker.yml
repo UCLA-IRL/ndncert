@@ -9,10 +9,10 @@ on:
   workflow_dispatch:
 
 permissions:
+  artifact-metadata: write
   attestations: write
   id-token: write
   packages: write
-  artifact-metadata: write
 
 jobs:
   ndncert-build:

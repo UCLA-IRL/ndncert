@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
- * Copyright (c) 2017-2025, Regents of the University of California.
+ * Copyright (c) 2017-2026, Regents of the University of California.
  *
  * This file is part of ndncert, a certificate management system based on NDN.
  *
@@ -23,18 +23,14 @@
 #include <ndn-cxx/util/logger.hpp>
 
 #include <regex>
-#include <cstdlib>
 
-#if defined(__has_include)
-#  if __has_include(<boost/process/io.hpp>) && __has_include(<boost/process/system.hpp>)
-#    include <boost/process/io.hpp>
-#    include <boost/process/system.hpp>
-#    define NDNCERT_HAVE_BOOST_PROCESS 1
-#  else
-#    define NDNCERT_HAVE_BOOST_PROCESS 0
-#  endif
+#include <boost/version.hpp>
+#if BOOST_VERSION >= 108600
+#include <boost/process/v1/io.hpp>
+#include <boost/process/v1/system.hpp>
 #else
-#  define NDNCERT_HAVE_BOOST_PROCESS 0
+#include <boost/process/io.hpp>
+#include <boost/process/system.hpp>
 #endif
 
 namespace ndncert {
@@ -185,12 +181,13 @@ ChallengeEmail::sendEmail(const std::string& emailAddress, const std::string& se
              request.caPrefix.toUri() + "\" \"" +
              request.cert.getName().toUri() + "\"";
 
-  int ret = 0;
-#if NDNCERT_HAVE_BOOST_PROCESS
-  ret = boost::process::system(command, boost::process::std_in < boost::process::null);
+#if BOOST_VERSION >= 108600
+  // TODO: migrate to Boost.Process v2
+  namespace bp = boost::process::v1;
 #else
-  ret = std::system((command + " < /dev/null").c_str());
+  namespace bp = boost::process;
 #endif
+  int ret = bp::system(command, bp::std_in < bp::null);
   if (ret == 0) {
     NDN_LOG_TRACE("Sent email to " << emailAddress);
   }
